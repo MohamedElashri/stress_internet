@@ -167,63 +167,52 @@ if [ "$(ls -A $iso_dir)" ]; then
     log_info "Old ISO files removed from $iso_dir"
 fi
 
-# Infinite loop to download ISOs repeatedly between 3 AM and 6 AM
-while true; do
-    current_hour=$(date +'%H')
+# Main download loop (no need for time window check, timer controls this)
+run_num=1
+active_downloads=0
 
-    # If running in manual mode (-m), bypass the time window check
-    if (( MANUAL_MODE == 1 )) || (( 3 <= 10#$current_hour && 10#$current_hour < 6 )); then
-        run_num=1
-        active_downloads=0
+for iso_name in "${!iso_urls[@]}"; do
+    iso_url="${iso_urls[$iso_name]}"
+    iso_file="$iso_dir/$(basename $iso_url)"
+    start_time=$(get_timestamp)
 
-        for iso_name in "${!iso_urls[@]}"; do
-            iso_url="${iso_urls[$iso_name]}"
-            iso_file="$iso_dir/$(basename $iso_url)"
-            start_time=$(get_timestamp)
+    log_manual "Starting download for $iso_name"
 
-            log_manual "Starting download for $iso_name"
+    (
+        start_download=$(date +%s)
+        retry_download "$iso_url" "$iso_file"
+        end_download=$(date +%s)
+        end_time=$(get_timestamp)
 
-            (
-                start_download=$(date +%s)
-                retry_download "$iso_url" "$iso_file"
-                end_download=$(date +%s)
-                end_time=$(get_timestamp)
+        # Log the download information along with system usage
+        log_download_info "$run_num" "$iso_name" "$start_time" "$end_time"
 
-                # Log the download information along with system usage
-                log_download_info "$run_num" "$iso_name" "$start_time" "$end_time"
+        # Delete the ISO after download
+        if [[ -f "$iso_file" ]]; then
+            rm -f "$iso_file"
+        else
+            log_error "ISO file not found: $iso_file"
+        fi
 
-                # Delete the ISO after download
-                if [[ -f "$iso_file" ]]; then
-                    rm -f "$iso_file"
-                else
-                    log_error "ISO file not found: $iso_file"
-                fi
+        log_manual "Finished download for $iso_name, waiting for next one."
 
-                log_manual "Finished download for $iso_name, waiting for next one."
+        # Randomized delay between downloads
+        sleep $(( RANDOM % 50 + 10 ))
 
-                # Randomized delay between downloads
-                sleep $(( RANDOM % 50 + 10 ))
+    ) &
 
-            ) &
-
-            # Limit concurrent downloads
-            ((active_downloads++))
-            if ((active_downloads >= MAX_CONCURRENT)); then
-                log_manual "Waiting for concurrent downloads to finish"
-                wait
-                active_downloads=0
-            fi
-
-            # Increment run number for the next log file
-            ((run_num++))
-        done
-
-        # Wait for all remaining background processes to finish
-        log_manual "Waiting for remaining downloads to complete"
+    # Limit concurrent downloads
+    ((active_downloads++))
+    if ((active_downloads >= MAX_CONCURRENT)); then
+        log_manual "Waiting for concurrent downloads to finish"
         wait
-    else
-        # Sleep for 5 minutes if outside the 3 AM to 6 AM window
-        log_manual "Outside the 3 AM to 6 AM window, sleeping for 5 minutes."
-        sleep 300
+        active_downloads=0
     fi
+
+    # Increment run number for the next log file
+    ((run_num++))
 done
+
+# Wait for all remaining background processes to finish
+log_manual "Waiting for remaining downloads to complete"
+wait
